@@ -8,6 +8,7 @@ pygame.display.set_icon(pygame.image.load("assets/icon.png"))
 
 # Set the first scene
 glb.scene_manager.changeScene(NamePrompt(), 100) # 100 skips the fade out
+glb.sound_engine.playMusic("ambience")
 
 running = True
 while running:
@@ -32,5 +33,8 @@ while running:
     pygame.display.set_caption(f'Laserpunk @ {int(glb.clock.get_fps())} FPS')
 
     glb.clock.tick(100)
+
+# Save the game before it closes
+glb.db_data.writeData()
 
 pygame.quit()

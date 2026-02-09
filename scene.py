@@ -5,7 +5,7 @@ import engine
 import random
 import utils
 import data
-from PIL import Image
+import dictionaries
 
 class SceneTransition:
     def __init__(self):
@@ -38,8 +38,7 @@ class SceneTransition:
                         glb.main_menu.play_button.hover_image = utils.loadScaledAsset("assets/main_menu/play_hovered.png")
                         glb.main_menu.play_button.current_image = glb.main_menu.play_button.image
 
-                        # Reset the current door frame
-                        glb.main_menu.current_door_frame = glb.main_menu.door_frames[0]
+                        glb.main_menu.door_anim.reset()
 
                     else:
                         # Change the play button to a resume button
@@ -135,7 +134,7 @@ class NamePrompt:
                     if self.name_text != "":
                         self.go_to_game = True
 
-                        data.player_name = self.name_text
+                        data.DBData.player_name = self.name_text
 
                         # Hide the indicator
                         self.indicator_timer = -1
@@ -165,7 +164,7 @@ class NamePrompt:
                 if self.red_text_visible.width > self.red_text.get_width():
                     self.red_text_visible.width = self.red_text.get_width()
 
-                    glb.scene_manager.changeScene(glb.main_menu, 1, 1)
+                    glb.scene_manager.changeScene(SaveSelect())
 
     def draw(self, screen):
         screen.fill((0, 0, 0))
@@ -190,22 +189,121 @@ class NamePrompt:
                 (self.name_text_pos[0] + self.name_text_surf.get_width() + (4 if len(self.name_text) != 0 else -2), self.name_text_pos[1] - 4)
             )
 
+class SaveSelect:
+    def __init__(self):
+        glb.db_data.checkFirstTime()
+
+        self.font = utils.SmallFont((255, 255, 255, 255))
+
+        self.text_select = self.font.render("Select save")
+        self.text_leaderboard = self.font.render("Leaderboard")
+
+        self.scores_list = utils.ListBox(((glb.screen_width - 320) // 2 - 300, (glb.screen_height - 400) // 2, 320, 400))
+        self.saves_list = utils.ListBox(((glb.screen_width - 320) // 2 + 300, (glb.screen_height - 400) // 2, 320, 400))
+
+        # Display the available saves
+        for save_name, save_score in glb.db_data.readPlayerSaves():
+            self.saves_list.addItem(save_name, str(save_score))
+
+        # Display the top scores
+        for i, (player_name, save_score) in enumerate(glb.db_data.readTopScores()):
+            self.scores_list.addItem(f"{i + 1} {player_name}", str(save_score))
+
+        def openSave():
+            # Apply the settings from the selected save
+            read_settings = glb.db_data.readPlayerSettings(self.saves_list.current_selected_item.name)
+
+            if read_settings != []:
+                settings.darkness     = read_settings[0]
+                settings.hints        = read_settings[1]
+                settings.music_volume = read_settings[2]
+                settings.movement     = [pygame.K_w, pygame.K_a, pygame.K_s, pygame.K_d] if read_settings[3] else [pygame.K_UP, pygame.K_LEFT, pygame.K_DOWN, pygame.K_RIGHT]
+                settings.sprint_key   = read_settings[4]
+
+                glb.main_menu.settings_panel.setup()
+
+            # Set the flag
+            data.DBData.opened_save = self.saves_list.current_selected_item.name
+
+            progress_dict = glb.db_data.readProgress(self.saves_list.current_selected_item.name)
+
+            def toApply():
+                glb.engine.score = glb.db_data.readSaveScore(self.saves_list.current_selected_item.name)
+                glb.engine.player.inventory.aquireNewWeapon(progress_dict["player_weapon"])
+
+                for slot_name, slot_image_path, slot_amount in progress_dict["player_inventory_slots"]:
+                    # Some textures are preloaded
+                    if slot_image_path == "":
+                        slot_image = None
+
+                        if slot_name in dictionaries.Crystals.dictionary:
+                            slot_image = dictionaries.Crystals.dictionary[slot_name]
+                        elif slot_name in dictionaries.Scraps.dictionary:
+                            slot_image = dictionaries.Scraps.dictionary[slot_name]
+
+                        glb.engine.player.inventory.slots.append(engine.InterfaceItem(slot_name, "", slot_image))
+
+                    else:
+                        glb.engine.player.inventory.slots.append(engine.InterfaceItem(slot_name, slot_image_path))
+
+                    glb.engine.player.inventory.slot_amounts.append(slot_amount)
+
+            glb.engine.to_apply = toApply
+
+            glb.main_menu.intro_active = True
+            glb.scene_manager.changeScene(glb.main_menu, 1, 100)
+
+            glb.sound_engine.switchMusic("main_theme", 0.8, 0, 0, 11)
+
+        def newSave():
+            glb.main_menu.settings_panel.setup()
+
+            glb.main_menu.intro_active = True
+            glb.scene_manager.changeScene(glb.main_menu, 1, 100)
+
+            glb.sound_engine.switchMusic("main_theme", 0.8, 0, 0, 11)
+
+        self.open_save_button = utils.Button((780, 568), "assets/main_menu/open_save.png", "assets/main_menu/open_save_hovered.png", openSave)
+        self.new_save_button = utils.Button((964, 568), "assets/main_menu/new_save.png", "assets/main_menu/new_save_hovered.png", newSave)
+
+    def input(self, input_stream):
+        self.saves_list.input(input_stream)
+
+        if self.saves_list.current_selected_item != None:
+            self.open_save_button.input(input_stream)
+
+        self.new_save_button.input(input_stream)
+
+    def update(self):
+        pass
+
+    def draw(self, screen):
+        screen.fill((0, 0, 0))
+
+        screen.blit(self.text_leaderboard, ((glb.screen_width - self.text_leaderboard.get_width()) // 2 - 300, 100))
+        screen.blit(self.text_select, ((glb.screen_width - self.text_select.get_width()) // 2 + 300, 100))
+        screen.blit(self.open_save_button.current_image, self.open_save_button.pos)
+        screen.blit(self.new_save_button.current_image, self.new_save_button.pos)
+
+        self.scores_list.draw(screen)
+        self.saves_list.draw(screen)
+
 class ToBeContinued:
     def __init__(self):
         # Additional score boost if the player was playing without hints
         if not settings.hints:
-            data.score += 100
+            glb.engine.score += 100
 
         # Count in the time boost
-        data.score += (glb.engine.score_time_boost - glb.engine.score_time_boost % 20)
+        glb.engine.score += (glb.engine.score_time_boost - glb.engine.score_time_boost % 20)
 
         # Heh.
-        if data.player_name == "ANDROPOLIS0":
-            data.score = 2000
+        if data.DBData.player_name == "ANDROPOLIS0":
+            glb.engine.score = 2000
 
         # Cap the score at 2k
-        if data.score > 2000:
-            data.score = 2000
+        if glb.engine.score > 2000:
+            glb.engine.score = 2000
 
         self.font_tier_1 = utils.SmallFont((255, 255, 255))
         self.font_tier_2 = utils.SmallFont((75,  200, 150))
@@ -235,7 +333,7 @@ class ToBeContinued:
         self.counter_text_pos = ((glb.screen_width - self.counter_text.get_width()) // 2, 400)
 
         self.counter_num = 0
-        self.final_score = data.score
+        self.final_score = glb.engine.score
 
         # Scaling animation
         self.current_scale = 1.0
@@ -340,7 +438,7 @@ class ToBeContinued:
                 pygame.event.post(pygame.event.Event(pygame.QUIT))
 
 class SettingsPanel:
-    def __init__(self):
+    def setup(self):
         self.music_volume_slider = utils.Slider((264 * 4 - 632, 244), settings.music_volume, 0, 200)
 
         self.sprint_key_remapper = utils.ReMapper(settings.sprint_key, (264 * 4 - 424, 308))
@@ -360,9 +458,17 @@ class SettingsPanel:
         # If the variable was actually changed, apply it to the real one
         if darkness_new     != None: settings.darkness     = darkness_new 
         if hints_new        != None: settings.hints        = hints_new
-        if music_volume_new != None: settings.music_volume = music_volume_new
         if movement_new     != None: settings.movement     = movement_new
         if sprint_key_new   != None: settings.sprint_key   = sprint_key_new
+
+        if music_volume_new != None:
+            settings.music_volume = music_volume_new
+
+            current_volume = pygame.mixer.music.get_volume()
+
+            if current_volume == 0: current_volume = 1
+
+            pygame.mixer.music.set_volume(current_volume * (settings.music_volume / 100))
 
     def draw(self, bg_offset, screen):
         # Slider drawing
@@ -391,6 +497,15 @@ class MainMenu:
         self.moonrays_image = utils.loadScaledAsset("assets/main_menu/moonrays.png").convert_alpha()
         self.bg_effects_image = utils.loadScaledAsset("assets/main_menu/background_effects.png").convert_alpha()
 
+        # Intro variables
+        self.intro_active = False # Gets set to true by SaveSelect
+        self.intro_eyelid_top = utils.loadScaledAsset("assets/main_menu/intro_eye.png").convert_alpha()
+        self.intro_eyelid_bottom = pygame.transform.flip(self.intro_eyelid_top, False, True)
+        self.intro_lid_ys = [
+            0,
+            glb.screen_height - self.intro_eyelid_bottom.get_height()
+        ]
+
         # Moving variables
 
         # 0    --> Window   view
@@ -405,26 +520,11 @@ class MainMenu:
         # Move the UI away when entering
         self.ui_vertical_offset = 0
 
+        def startGame():
+            glb.scene_manager.changeScene(glb.engine, fade_in_speed=0.50)
+
         # Door animation
-        self.door_frames = []
-        door_gif = Image.open("assets/main_menu/door.gif")
-
-        # Convert the gif file in to an array of pygame surfaces
-        try:
-            while True:
-                frame = door_gif.convert("RGB")
-                frame_image = pygame.image.fromstring(frame.tobytes(), frame.size, frame.mode).convert()
-
-                self.door_frames.append(pygame.transform.scale(frame_image, (frame_image.get_width() * 4, frame_image.get_height() * 4)))
-
-                door_gif.seek(door_gif.tell() + 1)
-
-        except EOFError:
-            pass # No more frames, reached the end of the file
-
-        self.current_door_frame = self.door_frames[0]
-        self.door_frame_timer = 0 # To keep track of time between individual frames
-        self.playing_door_animation = False
+        self.door_anim = utils.Gif("assets/main_menu/door.gif", (344 * 4, 16 * 4), callback=startGame)
 
         # Title part
         self.title_normal = utils.loadScaledAsset("assets/main_menu/title_normal.png", 3).convert_alpha()
@@ -440,27 +540,33 @@ class MainMenu:
 
         # Buttons
         def enter():
-            if data.first_time: data.first_time = False
+            if data.DBData.first_time: data.DBData.first_time = False
 
             self.entering = True
             self.bg_image_x = -1 # Nudge to start the transition
+
+            glb.sound_engine.switchMusic("ambience", 1, 0, 4000)
 
         def openSettings():
             self.opening_settings = True
             self.bg_image_x = 1 # Nudge to start the transition
 
+            glb.sound_engine.fadeMusicVolume(0.2)
+
         def closeSettings():
             self.closing_settings = True
             self.bg_image_x = 264 * 4 - 1 # Nudge to start the transition
 
+            glb.sound_engine.fadeMusicVolume(0.8)
+
         def exit():
             pygame.event.post(pygame.event.Event(pygame.QUIT))
 
-        self.play_button = utils.Button((glb.screen_width - 80 - 64, 308), "assets/main_menu/play.png", "assets/main_menu/play_hovered.png", enter)
-        self.settings_button = utils.Button((520, 636), "assets/main_menu/settings.png", "assets/main_menu/settings_hovered.png", openSettings)
-        self.exit_button = utils.Button((44, glb.screen_height - 16 - 52), "assets/main_menu/exit_normal.png", "assets/main_menu/exit_hovered.png", exit)
+        self.play_button = utils.Button((glb.screen_width - 80 - 64, 308), "assets/main_menu/play.png", "assets/main_menu/play_hovered.png", enter, "menu_button")
+        self.settings_button = utils.Button((520, 636), "assets/main_menu/settings.png", "assets/main_menu/settings_hovered.png", openSettings, "menu_button")
+        self.exit_button = utils.Button((44, glb.screen_height - 16 - 52), "assets/main_menu/exit_normal.png", "assets/main_menu/exit_hovered.png", exit, "menu_button")
 
-        if data.first_time:
+        if data.DBData.first_time:
             self.doesnt_know_the_buttons_timer = 1000
 
             # VISIBLE VARIANTS BECAUSE MFS ARE BLIND
@@ -480,13 +586,13 @@ class MainMenu:
             self.wave_visible_length = 100
 
         # Settings view
-        self.close_settings_button = utils.Button((glb.screen_width - 180 - 64, 308), "assets/main_menu/close_settings.png", "assets/main_menu/close_settings_hovered.png", closeSettings)
+        self.close_settings_button = utils.Button((glb.screen_width - 180 - 64, 308), "assets/main_menu/close_settings.png", "assets/main_menu/close_settings_hovered.png", closeSettings, "menu_button")
         self.close_settings_button.current_image.set_alpha(0) # This button appears when opening settings and disappears when closing them
 
         self.settings_panel = SettingsPanel()
 
     def input(self, input_stream):
-        if not (self.entering or self.opening_settings or self.closing_settings):
+        if not (self.intro_active or self.entering or self.opening_settings or self.closing_settings):
             # Interaction at the window view
             if self.bg_image_x == 0:
                 self.play_button.input(input_stream)
@@ -496,6 +602,8 @@ class MainMenu:
                 if (input_stream.mouse.isButtonPressed(0) and self.title_rect.collidepoint(input_stream.mouse.getPosition())):
                     if   self.title_image == self.title_normal:  self.title_image = self.title_clicked
                     elif self.title_image == self.title_clicked: self.title_image = self.title_normal
+
+                    glb.sound_engine.playSound("title_clicked")
 
                     self.title_shake_timer = 7
 
@@ -508,7 +616,23 @@ class MainMenu:
             self.exit_button.input(input_stream)
 
     def update(self):
-        if self.entering:
+        if self.intro_active:
+            # Eyelids moving
+            y1_target = -self.intro_eyelid_top.get_height()
+            y2_target = glb.screen_height
+
+            # Move a fraction of the remaining distance each frame
+            d1 = y1_target - self.intro_lid_ys[0]
+            d2 = y2_target - self.intro_lid_ys[1]
+
+            # 0.1 is for general speed and 0.2 is for easing in/out effect
+            self.intro_lid_ys[0] += (d1 * 0.1) * 0.2
+            self.intro_lid_ys[1] += (d2 * 0.1) * 0.2
+
+            if abs(d1) < 16:
+                self.intro_active = False
+
+        elif self.entering:
             # UI moving
             self.ui_vertical_offset -= 10
 
@@ -521,7 +645,7 @@ class MainMenu:
             if self.bg_image_x <= -264 * 4 + 0.5:
                 self.bg_image_x = -264 * 4
                 self.entering = False
-                self.playing_door_animation = True
+                self.door_anim.start()
 
         elif self.opening_settings:
             # Background moving
@@ -584,24 +708,8 @@ class MainMenu:
             # Also have to modify the title_rect.y because of the click detection
             self.title_rect.y = 110 + self.title_bobbing_offset
 
-        # Door animation
-        if self.playing_door_animation:
-            self.door_frame_timer += 1
-
-            if self.door_frame_timer == 5:
-                self.door_frame_timer = 0
-
-                current_frame_index = self.door_frames.index(self.current_door_frame)
-
-                if current_frame_index + 1 < len(self.door_frames):
-                    self.current_door_frame = self.door_frames[current_frame_index + 1]
-
-                else:
-                    self.playing_door_animation = False
-                    glb.scene_manager.changeScene(glb.engine, fade_in_speed=0.50)
-
         # If the player doesnt know the buttons start ticking the timer
-        if data.first_time and self.doesnt_know_the_buttons_timer > 0:
+        if data.DBData.first_time and self.doesnt_know_the_buttons_timer > 0:
             self.doesnt_know_the_buttons_timer -= 1
 
     def draw(self, screen):
@@ -628,7 +736,7 @@ class MainMenu:
             screen.blit(self.settings_button.current_image, (self.settings_button.pos[0] + self.bg_image_x, self.settings_button.pos[1]))
 
             # VISIBLE VARIANTS BECAUSE MFS ARE BLIND
-            if data.first_time and self.doesnt_know_the_buttons_timer == 0:
+            if data.DBData.first_time and self.doesnt_know_the_buttons_timer == 0:
                 # Display the wave
                 alpha_step = (255 / self.wave_visible_length) * self.wave_visible_modifier
                 self.visible_buttons_current_alpha += alpha_step
@@ -653,7 +761,7 @@ class MainMenu:
                     screen.blit(self.settings_visible, (self.settings_button.pos[0] + self.bg_image_x, self.settings_button.pos[1]))
 
             # If it became not first time then make the visible variants smoothly fade out
-            if not data.first_time and hasattr(self, "visible_buttons_current_alpha") and self.visible_buttons_current_alpha > 0:
+            if not data.DBData.first_time and hasattr(self, "visible_buttons_current_alpha") and self.visible_buttons_current_alpha > 0:
                 # Display the wave
                 alpha_step = 255 / self.wave_visible_length
                 self.visible_buttons_current_alpha -= alpha_step
@@ -677,6 +785,12 @@ class MainMenu:
 
         # Foreground drawing
         screen.blit(self.night_hue_shift,    (0, 0))
-        screen.blit(self.current_door_frame, (self.bg_image_x + 344 * 4, 16 * 4))
+
+        self.door_anim.draw(screen, (self.bg_image_x + 344 * 4, self.door_anim.rect.y))
+
         screen.blit(self.moonrays_image,     (int(self.bg_image_x * 1.16) - 264 * 4 - 168, 0)) # Move slightly off to give 3D feel
         screen.blit(self.bg_effects_image,   (0, 0))
+
+        if self.intro_active:
+            screen.blit(self.intro_eyelid_top, (0, self.intro_lid_ys[0]))
+            screen.blit(self.intro_eyelid_bottom, (0, self.intro_lid_ys[1]))

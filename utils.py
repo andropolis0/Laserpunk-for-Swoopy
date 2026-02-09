@@ -1,5 +1,7 @@
 import pygame
 import pygame.freetype
+import globals as glb
+from PIL import Image
 
 pygame.freetype.init() # For the Typer
 
@@ -13,6 +15,89 @@ def loadScaledAsset(image_path, scale=4, rotation=0):
     width, height = image.get_size()
 
     return pygame.transform.scale(image, (width * scale, height * scale))
+
+class Gif:
+    def __init__(self, gif_path, pos, speed=5, loops=1, callback=None):
+        self.frames = [] # Array of pygame surfaces
+        self.current_frame_idx = 0
+
+        # Timing of the frames
+        self.frame_timer = 0
+        self.frame_timer_target = speed
+
+        self.reverse_play = False
+
+        self.active = False # True = playing gif, False = paused gif
+        self.loops = loops # -1 = infinite play, n = n times repeated (gets decreased by 1 each new play)
+        self.callback = callback # Called when the gif reaches the end, gets called multiple times if the gif loops
+
+        # Loading the gif
+        gif_file = Image.open(gif_path)
+
+        # Convert every frame and add it to the frames array
+        try:
+            while True:
+                frame = gif_file.convert("RGB")
+                frame_image = pygame.image.fromstring(frame.tobytes(), frame.size, frame.mode).convert()
+
+                self.frames.append(pygame.transform.scale(frame_image, (frame_image.get_width() * 4, frame_image.get_height() * 4)))
+
+                gif_file.seek(gif_file.tell() + 1)
+
+        except EOFError:
+            pass # No more frames, reached the end of the file
+
+        self.rect = pygame.Rect(*pos, *self.frames[0].get_size())
+
+    def start(self, reverse=False):
+        self.active = True
+
+        if not reverse and self.reverse_play:
+            self.frames.reverse() # Reverse the list so the gif plays normally
+        if reverse and not self.reverse_play:
+            self.frames.reverse() # Reverse the list so the gif plays backwards
+
+        self.reverse_play = reverse
+
+    def pause(self):
+        self.active = False
+
+    def reset(self):
+        self.current_frame_idx = 0
+        self.frame_timer = 0
+
+    def draw(self, surface, custom_updated_pos=None):
+        # custom_updated_pos is only used when the gif changes position elsewhere (mostly engine.camera.apply)
+
+        surface.blit(self.frames[self.current_frame_idx], custom_updated_pos if custom_updated_pos != None else self.rect.topleft)
+
+        if not self.active: return
+
+        self.frame_timer += 1
+
+        if self.frame_timer == self.frame_timer_target:
+            self.frame_timer = 0
+
+            # If the next frame is valid, increment the idx
+            if self.current_frame_idx + 1 < len(self.frames):
+                self.current_frame_idx += 1
+
+                return
+
+            # This part is only called once when the gif ends
+
+            if self.loops > 0:
+                self.loops -= 1
+
+            # Stop once it has repeated the set amount of times
+            if self.loops == 0:
+                self.active = False
+
+            else:
+                self.reset()
+
+            if self.callback != None:
+                self.callback()
 
 class SmallFont:
     # NOTE: These variables are at class level, so all SmallFont instances have the same ones
@@ -109,7 +194,7 @@ class SmallFont:
         return render_surf
 
 class Button:
-    def __init__(self, pos, image, hover_image, callback):
+    def __init__(self, pos, image, hover_image, callback, hover_sound="button"):
         self.image = loadScaledAsset(image)
         self.hover_image = loadScaledAsset(hover_image)
         self.current_image = self.image
@@ -119,10 +204,16 @@ class Button:
 
         self.callback = callback
 
+        self.hover_sound = hover_sound
+
     def input(self, input_stream):
         if self.rect.collidepoint(input_stream.mouse.getPosition()):
-            self.current_image = self.hover_image
-            self.rect.size = self.current_image.get_size()
+            # So this part is only done once
+            if self.current_image != self.hover_image:
+                self.current_image = self.hover_image
+                self.rect.size = self.current_image.get_size()
+
+                glb.sound_engine.playSound(self.hover_sound)
 
             if input_stream.mouse.isButtonPressed(0):
                 # Reset the visuals
@@ -470,3 +561,124 @@ class Typer:
         # Draw the current line being typed
         if self.current_line_text:
             layer_1.blit(self.font.render(self.current_line_text), (self.pos[0], y_offset))
+
+class ListEntry:
+    def __init__(self, listbox, name, bg_color=(20, 20, 20), secondary_text=""):
+        self.bg_color = bg_color
+
+        self.selected = False
+
+        self.size = (listbox.bg_rect[2] - 8, 40)
+
+        # Possible surfaces
+        self.normal_surf = pygame.Surface(self.size)
+        self.hovered_surf = pygame.Surface(self.size)
+        self.selected_surf = pygame.Surface(self.size)
+
+        # Bg color
+        self.normal_surf.fill(self.bg_color)
+        self.hovered_surf.fill((40, 40, 40))
+        self.selected_surf.fill((128, 0, 0))
+
+        # Text
+        self.name = name
+
+        text = listbox.font.render(name)
+        self.normal_surf.blit(text,   (8, 10))
+        self.hovered_surf.blit(text,  (8, 10))
+        self.selected_surf.blit(text, (8, 10))
+
+        if secondary_text != "":
+            secondary_text_render = listbox.font.render(secondary_text)
+            self.normal_surf.blit(secondary_text_render,   (self.size[0] - secondary_text_render.get_width() - 8, 10))
+            self.hovered_surf.blit(secondary_text_render,  (self.size[0] - secondary_text_render.get_width() - 8, 10))
+            self.selected_surf.blit(secondary_text_render, (self.size[0] - secondary_text_render.get_width() - 8, 10))
+
+        self.current_surf = self.normal_surf
+
+class ListBox:
+    def __init__(self, bg_rect=(0, 0, 300, 400)):
+        self.items = {}
+        self.item_scroll_offset = 0 # For scrolling (cant go above 0)
+
+        self.current_selected_item = None
+
+        self.font = SmallFont((255, 255, 255, 255))
+
+        self.bg_rect = bg_rect
+        self.bg_color = (10, 10, 10)
+
+        self.surf = pygame.Surface((self.bg_rect[2], self.bg_rect[3]))
+        self.surf.fill(self.bg_color)
+
+    def addItem(self, item_name, secondary_text=""):
+        self.items[item_name] = ListEntry(self, item_name, secondary_text=secondary_text)
+
+    def removeItem(self, item_name):
+        self.items.pop(item_name)
+
+    def input(self, input_stream):
+        mouse_pos = input_stream.mouse.getPosition()
+
+        # The mouse is not even on the rect
+        if not pygame.Rect(*self.bg_rect).collidepoint(mouse_pos):
+            for item in self.items.values():
+                if not item.selected and item.current_surf != item.normal_surf:
+                    item.current_surf = item.normal_surf
+
+            return
+
+        # Check if it can be scrolled
+        if 4 + len(self.items) * (40 + 4) > self.bg_rect[3]:
+            for event in input_stream.general_events:
+                if event.type == pygame.MOUSEWHEEL:
+                    self.item_scroll_offset += event.y * 12
+
+                    # Clip the offset if it goes too far
+                    if self.item_scroll_offset > 0:
+                        self.item_scroll_offset = 0
+
+                    elif self.item_scroll_offset < -(4 + len(self.items) * (40 + 4)) + 44:
+                        self.item_scroll_offset = -(4 + len(self.items) * (40 + 4)) + 44
+
+        for i, item in enumerate(self.items.values()):
+            # Check collision
+            if pygame.Rect(self.bg_rect[0] + 4, self.item_scroll_offset + self.bg_rect[1] + 4 + i * (40 + 4), *item.size).collidepoint(mouse_pos):
+                if item.current_surf != item.selected_surf:
+                    item.current_surf = item.hovered_surf
+
+                # Check click
+                if input_stream.mouse.isButtonPressed(0):
+                    if item.current_surf == item.hovered_surf:
+                        item.current_surf = item.selected_surf
+                        item.selected = True
+
+                        self.current_selected_item = item
+
+                        # So there can only be one selected at a time
+                        for check_item in self.items.values():
+                            if check_item.selected and check_item != item:
+                                check_item.current_surf = check_item.normal_surf
+                                check_item.selected = False
+
+                    else:
+                        item.current_surf = item.hovered_surf
+                        item.selected = False
+
+                        # Since only one can be selected, no checking for others needed
+                        self.current_selected_item = None
+
+            # Set back to normal if not already
+            elif item.current_surf != item.normal_surf and item.current_surf != item.selected_surf:
+                item.current_surf = item.normal_surf
+
+    def update(self):
+        pass
+
+    def draw(self, surface):
+        self.surf.fill(self.bg_color)
+
+        for i, item in enumerate(self.items.values()):
+            self.surf.blit(item.current_surf, (4, self.item_scroll_offset + 4 + i * (40 + 4)))
+
+        surface.blit(self.surf, self.bg_rect)

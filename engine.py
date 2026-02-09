@@ -33,6 +33,8 @@ class GameEngine:
             self.play_again_trans.set_alpha(5) # Kick off the transition
 
         def goToMainMenu():
+            glb.sound_engine.switchMusic("main_theme", 0.8, 2000, 500, 12)
+
             glb.scene_manager.changeScene(glb.main_menu)
 
         def backToGame():
@@ -88,13 +90,24 @@ class GameEngine:
         # So the camera doesnt bump in to the wall
         self.camera_custom_target = CollidableEntity(640, 950, utils.loadScaledAsset("assets/player/player_up.png"), self.rm.current_room_map)
 
-        # Internal score time boost
+        # Scoring system:
+        # - crafting something = 10
+        # - collecting a crystal = 20
+        # - killing an automaton = 20
+        # - turning on the laser/crystal machine = 40
+        # - unlocking a golden locker = 80
+        # - unlocking a glass box = 100
+        # - playing without hints = 100
+        # - completing a regular level = 100
+
+        # Score
+        self.score = 0
         self.score_time_boost = 9800 # Starts at 9800 and decreases each frame
 
         # Start playing the music
-        if data.player_name == glb.names[0]:
+        if data.DBData.player_name == glb.names[0]:
             glb.sound_engine.playMusic("test")
-        elif data.player_name == glb.names[1]:
+        elif data.DBData.player_name == glb.names[1]:
             glb.sound_engine.playMusic("u_music", 0.9)
 
         # Optional hints stuff
@@ -108,6 +121,10 @@ class GameEngine:
 
             self.keys_hint_pos = ((glb.screen_width - self.keys_hint.get_width()) // 2, 120)
             self.keys_hint_timer = 150
+
+        # Function that is set in SaveSelect if the player is opening an opened world, to apply the previous progress
+        if hasattr(self, "to_apply"):
+            self.to_apply()
 
     def input(self, input_stream):
         if not self.trans_to_new_game:
@@ -138,12 +155,12 @@ class GameEngine:
                         if self.player.current_access_lvl != 9:
                             self.player.current_access_lvl = 9
 
-                    # Get weapon
+                    # Get weapon_luminite
                     if (input_stream.keyboard.isKeyDown(pygame.K_g) and
                         input_stream.keyboard.isKeyDown(pygame.K_b) and
                         input_stream.keyboard.isKeyPressed(pygame.K_l)):
                         if self.player.inventory.weapon_slot == None or self.player.inventory.weapon_slot.name == "stick":
-                            self.player.inventory.weapon_slot = InterfaceItem("weapon", "assets/items/weapon.png")
+                            self.player.inventory.aquireNewWeapon("weapon_luminite")
 
                     # Skip beginning
                     if (input_stream.keyboard.isKeyDown(pygame.K_k) and
@@ -252,7 +269,7 @@ class GameEngine:
         self.player.inventory.draw(self.layer_1)
         self.player.facility_map.draw(self.layer_1)
 
-        # Draw the player sword slash if slashing
+        # Draw the player weapon slash if slashing
         if 0 < self.player.weapon_cooldown < 12:
             self.layer_2.blit(self.player.current_slash_image, self.camera.apply(self.player.current_slash_rect))
 
@@ -554,7 +571,7 @@ class ObjectivesManager:
 
         self.time_opened = 300 # When an objective is set this starts going down
 
-        if data.player_name == glb.names[0]:
+        if data.DBData.player_name == glb.names[0]:
             ObjectivesManager.possible_objectives = ["".join(chr(x) for x in [100, 97, 106, 32, 109, 105, 32, 100, 114, 111, 103, 111]) for _ in range(len(ObjectivesManager.possible_objectives))]
 
     def setObjective(self, objective_text):
@@ -789,12 +806,12 @@ class Player(CollidableEntity):
         # Weapon stuff
         self.weapon_cooldown = 0
 
-        weapon_image = utils.loadScaledAsset("assets/player/slash.png").convert_alpha()
+        slash_image = utils.loadScaledAsset("assets/player/slash.png").convert_alpha()
         self.slash_images = [
-            pygame.transform.rotate(weapon_image, 180),
-            pygame.transform.rotate(weapon_image, -90),
-            weapon_image, # The image is already pointed downwards by default
-            pygame.transform.rotate(weapon_image, 90)
+            pygame.transform.rotate(slash_image, 180),
+            pygame.transform.rotate(slash_image, -90),
+            slash_image, # The image is already pointed downwards by default
+            pygame.transform.rotate(slash_image, 90)
         ]
         self.current_slash_image = self.slash_images[0]
         self.current_slash_rect = pygame.Rect(0, 0, 0, 0)
@@ -1057,7 +1074,7 @@ class Player(CollidableEntity):
             # Check if any entities are touching the tip of dis weapon
             for enemy in glb.engine.rm.current_room_map.entities:
                 if enemy.rect.colliderect(self.current_slash_rect):
-                    enemy.damage()
+                    enemy.damage(self.inventory.weapon_slot.name)
 
     def update(self):
         # If the player is hurt, slowly heal over time
@@ -1074,7 +1091,7 @@ class Player(CollidableEntity):
 
         # Attack cooldown logic
         if self.weapon_cooldown > 0:
-            if self.weapon_cooldown < 50:
+            if self.weapon_cooldown < 40:
                 self.weapon_cooldown += 1
             else:
                 self.weapon_cooldown = 0
@@ -1095,8 +1112,20 @@ class Inventory:
 
         self.weapon_slot = None
         self.weapon_slot_indicator = pygame.Surface((16, 16), pygame.SRCALPHA)
+        self.weapon_slot_cooldown_color = None
 
         self.access_display = utils.loadScaledAsset("assets/ui/access_display.png").convert_alpha() # For displaying the player's current highest access card
+
+    def aquireNewWeapon(self, weapon_name):
+        match weapon_name:
+            case "weapon":          self.weapon_slot_cooldown_color = (200, 175, 108)
+            case "weapon_silver":   self.weapon_slot_cooldown_color = (175, 190, 200)
+            case "weapon_cobalt":   self.weapon_slot_cooldown_color = ( 15, 105, 185)
+            case "weapon_gold":     self.weapon_slot_cooldown_color = (200, 180,  75)
+            case "weapon_luminite": self.weapon_slot_cooldown_color = (255, 255, 255) # When its white it gets rendered as green and pink
+            case _:                 self.weapon_slot_cooldown_color = (  0,   0,   0) # Just in case
+
+        self.weapon_slot = InterfaceItem(weapon_name, f"assets/items/{weapon_name}.png")
 
     def collect(self, item):
         already_in_slots_idx = -1
@@ -1176,7 +1205,7 @@ class Inventory:
                     item.final_image = item.chosen_image
                     self.current_item_idx = index
 
-    def drawWeaponIndicatorPath(self, rem, path_one, path_two):
+    def drawWeaponIndicatorPath(self, color, rem, path_one, path_two):
         for sx, sy, dx, dy, seg_len in [path_one, path_two]:
             if rem <= 0: break
 
@@ -1184,7 +1213,7 @@ class Inventory:
 
             pygame.draw.line(
                 self.weapon_slot_indicator,
-                (200, 175, 108),
+                color,
                 (round(sx), round(sy)),
                 (round(sx + dx * draw_len), round(sy + dy * draw_len))
             )
@@ -1208,32 +1237,36 @@ class Inventory:
         if self.weapon_slot != None:
             layer_1.blit(self.weapon_slot.normal_image, (10, 10))
 
-            # Refresh the indicator surface
-            self.weapon_slot_indicator.fill((0, 0, 0, 0))
+            # Only draw this when the cooldown is active
+            if glb.engine.player.weapon_cooldown != 0:
+                # Refresh the indicator surface
+                self.weapon_slot_indicator.fill((0, 0, 0, 0))
 
-            # Drawing cooldown indicator
-            x = y = 0
-            w = h = 15
+                # Drawing cooldown indicator
+                x = y = 0
+                w = h = 15
 
-            # Clamp the clamped cooldown and multiply by the total length of both lines to get the amount to draw on each path
-            remaining_len = max(0.0, min(1.0, max(0.0, min(1.0, glb.engine.player.weapon_cooldown / 50.0)))) * (w + h)
+                # Clamp the clamped cooldown and multiply by the total length of both lines to get the amount to draw on each path
+                remaining_len = max(0.0, min(1.0, max(0.0, min(1.0, glb.engine.player.weapon_cooldown / 40.0)))) * (w + h)
 
-            # TL -> TR -> BR
-            self.drawWeaponIndicatorPath(
-                remaining_len,
-                (x,     y, 1, 0, w), # top (left -> right)
-                (x + w, y, 0, 1, h), # right (top -> bottom)
-            )
+                # TL -> TR -> BR
+                self.drawWeaponIndicatorPath(
+                    self.weapon_slot_cooldown_color if self.weapon_slot.name != "weapon_luminite" else (165, 100, 125), # Pink
+                    remaining_len,
+                    (x,     y, 1, 0, w), # top (left -> right)
+                    (x + w, y, 0, 1, h), # right (top -> bottom)
+                )
 
-            # BR -> BL -> TL
-            self.drawWeaponIndicatorPath(
-                remaining_len,
-                (x + w, y + h, -1,  0, w), # bottom (right -> left)
-                (x,     y + h,  0, -1, h), # left (bottom -> top)
-            )
+                # BR -> BL -> TL
+                self.drawWeaponIndicatorPath(
+                    self.weapon_slot_cooldown_color if self.weapon_slot.name != "weapon_luminite" else (45, 105, 75), # Green
+                    remaining_len,
+                    (x + w, y + h, -1,  0, w), # bottom (right -> left)
+                    (x,     y + h,  0, -1, h), # left (bottom -> top)
+                )
 
-            # Blit the scaled up indicator, because line thickness in pygame is aids
-            layer_1.blit(pygame.transform.scale(self.weapon_slot_indicator, (64, 64)), (10, 10))
+                # Blit the scaled up indicator, because line thickness in pygame is aids
+                layer_1.blit(pygame.transform.scale(self.weapon_slot_indicator, (64, 64)), (10, 10))
 
         # Display the inventory items and their amounts
         for index, item in enumerate(self.slots):
@@ -1257,7 +1290,7 @@ class Automaton(CollidableEntity):
         self.dmg_last = 0
 
         # Visual stuff
-        if data.player_name == glb.names[0]:
+        if data.DBData.player_name == glb.names[0]:
             version = random.choice([1, 2])
 
             self.dmg_image = pygame.image.load(f"assets/ui/unused/hurtaumaton{version}.png").convert_alpha()
@@ -1272,8 +1305,15 @@ class Automaton(CollidableEntity):
         # Init the inner CollidableEntity
         super().__init__(start_x, start_y, self.image, current_map)
 
-    def damage(self):
-        self.health -= 20
+    def damage(self, damaged_by=""):
+        match damaged_by:
+            case "weapon":          self.health -= 20
+            case "weapon_silver":   self.health -= 25
+            case "weapon_cobalt":   self.health -= 35
+            case "weapon_gold":     self.health -= 80
+            case "weapon_luminite": self.health -= 100
+            case "":                self.health -= 20 # Just in case
+
         self.dmg_last = 30 # Switch to the hurt image for 30 frames
         self.image = self.dmg_image
 
@@ -1305,7 +1345,7 @@ class Automaton(CollidableEntity):
 
             current_room.entities.remove(self)
 
-            data.score += 20
+            glb.engine.score += 20
 
         # Reset to the normal image after the dmg_last timer runs out
         if self.dmg_last > 0:
@@ -1355,7 +1395,7 @@ class Automaton(CollidableEntity):
 
 class Map:
     def __init__(self, map_path, map_borders):
-        if data.player_name == glb.names[1] and map_borders == (144, 316, 144, 316):
+        if data.DBData.player_name == glb.names[1] and map_borders == (144, 316, 144, 316):
             self.map_image = pygame.image.load("assets/ui/unused/poole.png").convert()
         else:
             self.map_image = utils.loadScaledAsset(map_path).convert()
@@ -1386,7 +1426,7 @@ class BaseObject(pygame.sprite.Sprite):
         self.x,      self.y      = x, y
         self.rect.x, self.rect.y = x, y
 
-        if image_path == "assets/objects/laser_machine.png" and data.player_name == glb.names[0]:
+        if image_path == "assets/objects/laser_machine.png" and data.DBData.player_name == glb.names[0]:
             self.image = pygame.image.load("assets/ui/unused/machine.png")
 
         # Needed for collision detection / mouse hover
@@ -1396,6 +1436,8 @@ class InterfaceItem:
     def __init__(self, name, image_path, preloaded_image=None):
         self.name = name
         self.fixed_dim = 64 # Fixed dimension (64x64) (loaded image has to be this size after scaled up)
+
+        self.image_path = image_path # Only used in DBData when loading an opened save
 
         if preloaded_image is not None: # In case the texture is already loaded (like in the case of Lockers)
             self.normal_image = preloaded_image.copy() # copy() is necessary
@@ -1517,6 +1559,8 @@ class PaperItem(ClickableItem):
                 if self.close_button_current_image != self.close_button_hovered_image:
                     self.close_button_current_image = self.close_button_hovered_image
 
+                    glb.sound_engine.playSound("button")
+
                 # Hide the paper
                 if input_stream.mouse.isButtonPressed(0):
                     self.target_y = self.closed_y
@@ -1580,7 +1624,7 @@ class PaperItem(ClickableItem):
 
 class FacilityMap(PaperItem):
     def __init__(self):
-        super().__init__(424, 160, "assets/crowbr.png", "assets/ui/unused/facility_map.png" if data.player_name == glb.names[0] else "assets/ui/facility_map.png", None, True)
+        super().__init__(424, 160, "assets/crowbr.png", "assets/ui/unused/facility_map.png" if data.DBData.player_name == glb.names[0] else "assets/ui/facility_map.png", None, True)
 
         # Make the close button invisible
         self.close_button_image = pygame.Surface((0, 0))
@@ -1700,7 +1744,7 @@ class TinkerTable(BaseObject):
 
                 for recipe_combination in TinkerTable.recipes:
                     # Special crafting recipes that include the weapon slot
-                    if "stick" in recipe_combination or "weapon" in recipe_combination:
+                    if "stick" in recipe_combination or "weapon" in recipe_combination[0]:
                         if recipe_combination[0] == player_inv.weapon_slot.name and any(recipe_combination[1] == slot.name for slot in player_inv.slots):
                             recipeGridSorter(TinkerTable.recipes[recipe_combination])
 
@@ -1754,13 +1798,13 @@ class TinkerTable(BaseObject):
             # NOTE: The recipe InterfaceItem is used to create a new one, bc it will still have to be visible in the closing transition
 
             # Check if its a special recipe related to the weapon slot
-            if "stick" in found_combination or "weapon" in found_combination:
+            if "stick" in found_combination or "weapon" in found_combination[0]:
                 # Find the item in the player's inventory based on its name (combination_item_1 is in the weapon slot)
                 combination_item_2 = [index for index, item in enumerate(player_inv.slots) if item.name == found_combination[1]][0]
 
                 player_inv.discard(pos=combination_item_2)
 
-                player_inv.weapon_slot = InterfaceItem(recipe.name, "", recipe.normal_image)
+                player_inv.aquireNewWeapon(recipe.name)
 
             else:
                 # If the player is crafting a lower access card than their current level
@@ -1788,7 +1832,7 @@ class TinkerTable(BaseObject):
             self.opening = False
             self.closing = True
 
-            data.score += 10
+            glb.engine.score += 10
 
         def input(self, input_stream):
             for i, row in enumerate(self.recipe_grid_rects):
@@ -1861,7 +1905,12 @@ class TinkerTable(BaseObject):
 
         # Needs to have the values set here, because AccessCards.dictionary is empty at compile time
         TinkerTable.recipes = {
-            ("stick", "brass"): InterfaceItem("weapon", "assets/items/weapon.png"),
+            # Weapons
+            ("stick",         "brass"):    InterfaceItem("weapon", "assets/items/weapon.png"),
+            ("weapon",        "silver"):   InterfaceItem("weapon_silver",   "assets/items/weapon_silver.png"),
+            ("weapon_silver", "cobalt"):   InterfaceItem("weapon_cobalt",   "assets/items/weapon_cobalt.png"),
+            ("weapon_cobalt", "gold"):     InterfaceItem("weapon_gold",     "assets/items/weapon_gold.png"),
+            ("weapon_gold",   "luminite"): InterfaceItem("weapon_luminite", "assets/items/weapon_luminite.png"),
 
             # Access card crafting (access cards have preloaded textures)
             ("brass",     "quartz"):     InterfaceItem("access 1", "", AccessCards.dictionary[0]),
@@ -1892,7 +1941,7 @@ class TinkerTable(BaseObject):
             # Only allow regular interaction if the player has fixed the weapon
             # OR
             # If any item in the inventory is selected and the bots have been released (needed at the start of the game)
-            if (player.inventory.weapon_slot.name == "weapon" or
+            if ("weapon" in player.inventory.weapon_slot.name or
                 (player.inventory.current_item_idx != -1 and glb.engine.rm.current_room_map.bots_released)):
                 self.tinker_place.input(input_stream)
 
@@ -1967,7 +2016,7 @@ class LaserMachine(BaseObject):
                 5
             )
 
-            data.score += 40
+            glb.engine.score += 40
 
         def mirrorRepaired():
             self.mirror = BaseObject(self.base_x + 80, self.base_y + 212, "assets/objects/mirror.png") # Show the mirror is repaired
@@ -2015,6 +2064,8 @@ class CrystalMachine(BaseObject):
         self.y = 316
         super().__init__(self.x, self.y, "assets/objects/crystal_machine.png")
 
+        self.scrap_place_close_anim = utils.Gif("assets/objects/scrap_place_close.gif", (self.x + 144, self.y + 152))
+
         self.current_crystal = ""
         self.current_crystal_time = 0 # The amount of time required for the current_crystal to become current_grown_crystal
         self.current_grown_crystal = ""
@@ -2049,10 +2100,13 @@ class CrystalMachine(BaseObject):
             else:
                 glb.engine.om.setObjective(ObjectivesManager.possible_objectives[1])
 
-            data.score += 40
+            glb.engine.score += 40
 
         def crystalCollected():
             glb.engine.player.inventory.collect(InterfaceItem(self.current_grown_crystal, "", Crystals.dictionary[self.current_grown_crystal]))
+
+            self.scrap_place_close_anim.start(True) # Start the reversed gif, so it opens
+            self.scrap_place_close_anim.reset()
 
             # For the player's first time collecting a crystal
             if not glb.engine.rm.active_rooms["first_floor"].laser_machine.mirror_repaired:
@@ -2061,7 +2115,7 @@ class CrystalMachine(BaseObject):
             self.current_grown_crystal = ""
             self.current_scraps = []
 
-            data.score += 20
+            glb.engine.score += 20
 
         def scrapsPlaced():
             # The scrap the player wants to use should be selected at this point
@@ -2071,6 +2125,8 @@ class CrystalMachine(BaseObject):
             if not glb.engine.rm.active_rooms["first_floor"].laser_machine.mirror_repaired:
                 # Remove it from the player's inventory
                 glb.engine.player.inventory.discard(pos=glb.engine.player.inventory.current_item_idx)
+
+                self.scrap_place_close_anim.start()
 
                 glb.engine.rm.current_room_map.releaseTheBots() # The current room will be the ResourceRoom
                 # Do not do anything about the crystals here, they will become already fully grown when the player beats all of the bots
@@ -2096,6 +2152,9 @@ class CrystalMachine(BaseObject):
 
                 # Main crystal-recipe checker
                 if len(self.current_scraps) == 2:
+                    self.scrap_place_close_anim.start()
+                    self.scrap_place_close_anim.reset()
+
                     for combination in self.combinations.keys():
                         if self.current_scraps[0] in combination and self.current_scraps[1] in combination:
                             self.current_crystal = self.combinations[combination][0]
@@ -2111,14 +2170,28 @@ class CrystalMachine(BaseObject):
         self.console = ClickableItem(self.x + 16, self.y + 16, "assets/objects/machine_console.png", machineTurnedOn)
         self.crystals_book = PaperItem(self.x + 96, self.y + 16, "assets/objects/crystals_book.png", "assets/ui/book.png", None, True)
         self.scrap_place = ClickableItem(self.x + 140, self.y + 148, "assets/objects/scrap_place.png", scrapsPlaced)
-        self.crystal_collection = ClickableItem(self.x + 88, self.y + 80, "assets/objects/crystal_collection.png", crystalCollected)
+        self.crystal_collection = ClickableItem(self.x + 100, self.y + 76, "assets/objects/crystal_collection.png", crystalCollected)
 
-        self.crystal_collection_blink_timer = 0
-        self.crystal_collection_current_blink = 1 # Flips between 1 and 2
-        self.crystal_collection_blinks = [
-            utils.loadScaledAsset("assets/objects/crystal_collection_blink_1.png"),
-            utils.loadScaledAsset("assets/objects/crystal_collection_blink_2.png")
+        # Crystal collection animations
+        crystal_throbber_img = utils.loadScaledAsset("assets/objects/crystal_throbber.png")
+
+        self.crystal_throbber_frames = [
+            pygame.transform.rotate(crystal_throbber_img, -90),
+            pygame.transform.rotate(crystal_throbber_img, 180),
+            pygame.transform.rotate(crystal_throbber_img, 90),
+            crystal_throbber_img
         ]
+
+        self.crystal_throbber_current_frame = 0
+        self.crystal_throbber_timer = 0
+
+        self.crystal_finished_frames = [
+            utils.loadScaledAsset("assets/objects/crystal_finished_on.png"),
+            utils.loadScaledAsset("assets/objects/crystal_finished_off.png")
+        ]
+
+        self.crystal_finished_current_frame = 0
+        self.crystal_finished_timer = 0
 
     def growingCrystals(self):
         if self.current_crystal != "" and self.current_crystal_time > 0:
@@ -2147,27 +2220,41 @@ class CrystalMachine(BaseObject):
                         self.scrap_place.input(input_stream)
 
     def draw(self, layers):
-        layers[2].blit(self.console.image,       glb.engine.camera.apply(self.console.rect))
-        layers[2].blit(self.scrap_place.image,   glb.engine.camera.apply(self.scrap_place.rect))
-        layers[2].blit(self.crystals_book.image, glb.engine.camera.apply(self.crystals_book.rect))
+        layers[2].blit(self.console.image,            glb.engine.camera.apply(self.console.rect))
+        layers[2].blit(self.scrap_place.image,        glb.engine.camera.apply(self.scrap_place.rect))
+        layers[2].blit(self.crystals_book.image,      glb.engine.camera.apply(self.crystals_book.rect))
+        layers[2].blit(self.crystal_collection.image, glb.engine.camera.apply(self.crystal_collection.rect)) # Always has to be drawn (so the outline displays)
 
         self.crystals_book.draw(layers[0]) # Draw to layer_1
 
+        self.scrap_place_close_anim.draw(layers[2], glb.engine.camera.apply(self.scrap_place_close_anim.rect))
+
         # The player can collect the crystal (do the blinking animation)
         if self.current_grown_crystal != "":
-            self.crystal_collection_blink_timer += 1
+            self.crystal_finished_timer += 1
 
-            if self.crystal_collection_blink_timer == 100:
-                self.crystal_collection_blink_timer = 0
+            if self.crystal_finished_timer == 50:
+                self.crystal_finished_timer = 0
 
-                # FLip it
-                self.crystal_collection_current_blink = 1 if self.crystal_collection_current_blink == 2 else 2
+                # FLip the frame
+                self.crystal_finished_current_frame = 0 if self.crystal_finished_current_frame == 1 else 1
 
-            layers[2].blit(self.crystal_collection_blinks[self.crystal_collection_current_blink - 1], glb.engine.camera.apply(self.crystal_collection.rect))
+            layers[2].blit(self.crystal_finished_frames[self.crystal_finished_current_frame], glb.engine.camera.apply(self.crystal_collection.rect))
 
-        # No crystal to collect
-        else:
-            layers[2].blit(self.crystal_collection.image, glb.engine.camera.apply(self.crystal_collection.rect))
+        # Show the throbber
+        elif len(self.current_scraps) == 2:
+            self.crystal_throbber_timer += 1
+
+            if self.crystal_throbber_timer == 50:
+                self.crystal_throbber_timer = 0
+
+                # Move to the next frame
+                self.crystal_throbber_current_frame += 1
+
+                if self.crystal_throbber_current_frame == 4:
+                    self.crystal_throbber_current_frame = 0
+
+            layers[2].blit(self.crystal_throbber_frames[self.crystal_throbber_current_frame], glb.engine.camera.apply(self.crystal_collection.rect))
 
         # Scrap indicator lights drawing
         if len(self.current_scraps) >= 1:
@@ -2214,7 +2301,7 @@ class CrystalMachine(BaseObject):
 
 class FirstFloorMap(Map):
     def __init__(self):
-        super().__init__("assets/ui/unused/harden.png" if data.player_name == glb.names[1] else "assets/maps/first_floor.png", (120, 120, 120, 120))
+        super().__init__("assets/ui/unused/harden.png" if data.DBData.player_name == glb.names[1] else "assets/maps/first_floor.png", (120, 120, 120, 120))
         self.interaction = True
 
         # Entities
@@ -2238,7 +2325,7 @@ class FirstFloorMap(Map):
         def aquireStick():
             self.dropped_items.remove(self.stick) # Pick it up and add it to the player's weapon slot
 
-            glb.engine.player.inventory.weapon_slot = InterfaceItem("stick", "assets/items/stick.png")
+            glb.engine.player.inventory.aquireNewWeapon("stick")
 
         # (these get added to dropped items when the player turns on the laser machine)
         self.stick = ClickableItem(pile_x + 48, pile_y - 32, "assets/items/stick.png", aquireStick)
@@ -2316,8 +2403,8 @@ class ResourceRoomMap(Map):
 
             glb.engine.om.setObjective(ObjectivesManager.possible_objectives[2])
 
-        blueprint_path = "assets/ui/unused/blueprint.png" if data.player_name == glb.names[0] else "assets/ui/blueprint.png"
-        paper_path = "assets/ui/unused/paper.png" if data.player_name == glb.names[0] else "assets/ui/paper.png"
+        blueprint_path = "assets/ui/unused/blueprint.png" if data.DBData.player_name == glb.names[0] else "assets/ui/blueprint.png"
+        paper_path = "assets/ui/unused/paper.png" if data.DBData.player_name == glb.names[0] else "assets/ui/paper.png"
 
         self.dropped_items.add(PaperItem(432, 148, "assets/items/blueprint.png", blueprint_path, knowsToFixMachine))
         self.dropped_items.add(PaperItem(472, 360, "assets/items/instructions.png", paper_path, readInstructions))
@@ -2326,7 +2413,7 @@ class ResourceRoomMap(Map):
         self.bots_released = True
         self.bot_release_timer = 1 # Kick off the entering
 
-        # The player already knows to make the sword and fight the bots
+        # The player already knows to make the weapon and fight the bots
         glb.engine.om.clearObjective()
 
     def onEnter(self, entering_from):
@@ -2336,7 +2423,7 @@ class ResourceRoomMap(Map):
             glb.engine.player.changeXY(904, 444)
             glb.engine.camera.update(glb.engine.player, False)
 
-            if data.player_name == glb.names[1] and glb.sound_engine.current_music != "u2_music":
+            if data.DBData.player_name == glb.names[1] and glb.sound_engine.current_music != "u2_music":
                 glb.sound_engine.switchMusic("u2_music")
 
             # If its the first time entering the room

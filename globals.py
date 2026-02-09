@@ -4,6 +4,9 @@ import dictionaries
 import scene
 import engine
 import soundengine
+import data
+
+db_data = data.DBData()
 
 # Global variables
 screen_width = 1280

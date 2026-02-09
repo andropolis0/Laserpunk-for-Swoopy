@@ -1,6 +1,5 @@
 from engine import *
 import settings
-import data
 
 # Tile objects
 
@@ -171,7 +170,7 @@ class Locker(TileObject):
             glb.engine.player.inventory.discard(pos=glb.engine.player.inventory.current_item_idx) # Remove the key from the player's inventory
             self.unlocked = True # So the player can use it freely once it has been unlocked
 
-            data.score += 80
+            glb.engine.score += 80
 
         if self.unlocked:
             self.image = self.outlined_image # Just to this to prevent flickering, bc by default ClickableItem sets the image back to og
@@ -351,7 +350,7 @@ class GlassBox(TileObject):
         self.og_image = Tiles.object_tiles["GBU"].copy()
         self.image = self.og_image
 
-        data.score += 100
+        glb.engine.score += 100
 
     def draw(self, layer_1):
         if self.collecting:
@@ -580,7 +579,7 @@ class LevelRoom(Map):
 
                     glb.sound_engine.playSound("reciever", 1)
 
-                    data.score += 100
+                    glb.engine.score += 100
 
                     # Set all redirectors to active and all blockers to inactive
                     for object in self.objects:
@@ -941,4 +940,3 @@ class LevelRoom(Map):
         if not self.reward_locker_key_dropped and len(self.entities) == 0:
             self.dropped_items.add(PickupableItem("locker key", self.reward_locker_key_pos[0], self.reward_locker_key_pos[1], "assets/items/locker_key.png"))
             self.reward_locker_key_dropped = True
-            self.interactable_redirectors = True
